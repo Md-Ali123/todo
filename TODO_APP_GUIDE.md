@@ -1,10 +1,10 @@
-# Todo Application - Complete Implementation Guide
+# Todo Application - Complete Implementation Guide (TypeScript)
 
 ## 📋 Project Overview
 
 A full-stack TODO application built with:
-- **Frontend**: Next.js 14+ (App Router), React, Tailwind CSS
-- **Backend**: Next.js API Routes
+- **Frontend**: Next.js 14+ (App Router), React, TypeScript, Tailwind CSS
+- **Backend**: Next.js API Routes (TypeScript)
 - **Database**: MongoDB with Mongoose
 
 ### Data Model
@@ -24,7 +24,7 @@ npx create-next-app@latest todo-app
 ```
 
 **Configuration options:**
-- ✅ Would you like to use TypeScript? → **No** (or Yes, if preferred)
+- ✅ Would you like to use TypeScript? → **Yes**
 - ✅ Would you like to use ESLint? → **Yes**
 - ✅ Would you like to use Tailwind CSS? → **Yes**
 - ✅ Would you like to use `src/` directory? → **No**
@@ -44,10 +44,10 @@ npm install mongoose
 npm install date-fns
 ```
 
-### 1.4 Install Dev Dependencies (Optional)
+### 1.4 Install Dev Dependencies
 
 ```bash
-npm install -D @types/node
+npm install -D @types/node @types/mongoose
 ```
 
 ---
@@ -59,20 +59,23 @@ todo-app/
 ├── app/
 │   ├── api/
 │   │   └── todos/
-│   │       ├── route.js          # GET all, POST new
+│   │       ├── route.ts          # GET all, POST new
 │   │       └── [id]/
-│   │           └── route.js      # GET, PUT, DELETE by ID
-│   ├── layout.js
-│   └── page.js                   # Main page with UI
+│   │           └── route.ts      # GET, PUT, DELETE by ID
+│   ├── layout.tsx
+│   └── page.tsx                  # Main page with UI
 ├── models/
-│   └── Todo.js                   # Mongoose model
+│   └── Todo.ts                   # Mongoose model
 ├── lib/
-│   └── mongodb.js                # Database connection
+│   └── mongodb.ts                # Database connection
 ├── components/
-│   ├── TodoForm.js               # Add/Edit form
-│   ├── TodoList.js               # List of todos
-│   └── TodoItem.js               # Individual todo card
-├── .env.local                     # Environment variables
+│   ├── TodoForm.tsx              # Add/Edit form
+│   ├── TodoList.tsx              # List of todos
+│   └── TodoItem.tsx              # Individual todo card
+├── types/
+│   └── todo.ts                   # TypeScript interfaces
+├── .env.local                    # Environment variables
+├── tsconfig.json                 # TypeScript configuration
 ├── package.json
 └── README.md
 ```
@@ -96,11 +99,43 @@ MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/todoapp?retryWri
 
 ---
 
-## 💾 Step 4: Database Configuration
+## 💾 Step 4: TypeScript Types
 
-### 4.1 Create `lib/mongodb.js`
+### 4.1 Create `types/todo.ts`
 
-```javascript
+```typescript
+import { Document } from 'mongoose';
+
+export type TodoStatus = 'incomplete' | 'completed';
+
+export interface ITodo {
+  title: string;
+  description: string;
+  dueDate: Date;
+  status: TodoStatus;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export interface ITodoDocument extends ITodo, Document {
+  _id: string;
+}
+
+export interface TodoFormData {
+  title: string;
+  description: string;
+  dueDate: string;
+  status: TodoStatus;
+}
+```
+
+---
+
+## 🔧 Step 5: Database Configuration
+
+### 5.1 Create `lib/mongodb.ts`
+
+```typescript
 import mongoose from 'mongoose';
 
 const MONGODB_URI = process.env.MONGODB_URI;
@@ -111,13 +146,23 @@ if (!MONGODB_URI) {
   );
 }
 
-let cached = global.mongoose;
-
-if (!cached) {
-  cached = global.mongoose = { conn: null, promise: null };
+interface MongooseCache {
+  conn: typeof mongoose | null;
+  promise: Promise<typeof mongoose> | null;
 }
 
-async function dbConnect() {
+// Extend global type
+declare global {
+  var mongoose: MongooseCache | undefined;
+}
+
+let cached: MongooseCache = global.mongoose || { conn: null, promise: null };
+
+if (!global.mongoose) {
+  global.mongoose = cached;
+}
+
+async function dbConnect(): Promise<typeof mongoose> {
   if (cached.conn) {
     return cached.conn;
   }
@@ -127,7 +172,7 @@ async function dbConnect() {
       bufferCommands: false,
     };
 
-    cached.promise = mongoose.connect(MONGODB_URI, opts).then((mongoose) => {
+    cached.promise = mongoose.connect(MONGODB_URI!, opts).then((mongoose) => {
       return mongoose;
     });
   }
@@ -145,18 +190,19 @@ async function dbConnect() {
 export default dbConnect;
 ```
 
-**Purpose**: Connection pooling to reuse database connections across API routes.
+**Purpose**: Connection pooling to reuse database connections across API routes with proper TypeScript typing.
 
 ---
 
-## 📊 Step 5: Database Model
+## 📊 Step 6: Database Model
 
-### 5.1 Create `models/Todo.js`
+### 6.1 Create `models/Todo.ts`
 
-```javascript
-import mongoose from 'mongoose';
+```typescript
+import mongoose, { Schema, Model } from 'mongoose';
+import { ITodoDocument } from '@/types/todo';
 
-const TodoSchema = new mongoose.Schema(
+const TodoSchema = new Schema<ITodoDocument>(
   {
     title: {
       type: String,
@@ -185,29 +231,39 @@ const TodoSchema = new mongoose.Schema(
   }
 );
 
-export default mongoose.models.Todo || mongoose.model('Todo', TodoSchema);
+const Todo: Model<ITodoDocument> = 
+  mongoose.models.Todo || mongoose.model<ITodoDocument>('Todo', TodoSchema);
+
+export default Todo;
 ```
 
 ---
 
-## 🔌 Step 6: API Routes (Backend)
+## 🔌 Step 7: API Routes (Backend)
 
-### 6.1 Create `app/api/todos/route.js`
+### 7.1 Create `app/api/todos/route.ts`
 
-```javascript
-import { NextResponse } from 'next/server';
+```typescript
+import { NextRequest, NextResponse } from 'next/server';
 import dbConnect from '@/lib/mongodb';
 import Todo from '@/models/Todo';
+import { ITodo } from '@/types/todo';
+
+interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+}
 
 // GET - Fetch all todos
-export async function GET(request) {
+export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ITodo[]>>> {
   try {
     await dbConnect();
     
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status'); // Optional filter
     
-    let query = {};
+    let query: any = {};
     if (status && (status === 'completed' || status === 'incomplete')) {
       query.status = status;
     }
@@ -222,7 +278,7 @@ export async function GET(request) {
     return NextResponse.json(
       {
         success: false,
-        error: error.message,
+        error: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 400 }
     );
@@ -230,11 +286,11 @@ export async function GET(request) {
 }
 
 // POST - Create new todo
-export async function POST(request) {
+export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<ITodo>>> {
   try {
     await dbConnect();
     
-    const body = await request.json();
+    const body: ITodo = await request.json();
     const todo = await Todo.create(body);
     
     return NextResponse.json(
@@ -248,7 +304,7 @@ export async function POST(request) {
     return NextResponse.json(
       {
         success: false,
-        error: error.message,
+        error: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 400 }
     );
@@ -256,15 +312,31 @@ export async function POST(request) {
 }
 ```
 
-### 6.2 Create `app/api/todos/[id]/route.js`
+### 7.2 Create `app/api/todos/[id]/route.ts`
 
-```javascript
-import { NextResponse } from 'next/server';
+```typescript
+import { NextRequest, NextResponse } from 'next/server';
 import dbConnect from '@/lib/mongodb';
 import Todo from '@/models/Todo';
+import { ITodo } from '@/types/todo';
+
+interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+}
+
+interface RouteParams {
+  params: {
+    id: string;
+  };
+}
 
 // GET - Fetch single todo by ID
-export async function GET(request, { params }) {
+export async function GET(
+  request: NextRequest,
+  { params }: RouteParams
+): Promise<NextResponse<ApiResponse<ITodo>>> {
   try {
     await dbConnect();
     
@@ -288,7 +360,7 @@ export async function GET(request, { params }) {
     return NextResponse.json(
       {
         success: false,
-        error: error.message,
+        error: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 400 }
     );
@@ -296,11 +368,14 @@ export async function GET(request, { params }) {
 }
 
 // PUT - Update todo by ID
-export async function PUT(request, { params }) {
+export async function PUT(
+  request: NextRequest,
+  { params }: RouteParams
+): Promise<NextResponse<ApiResponse<ITodo>>> {
   try {
     await dbConnect();
     
-    const body = await request.json();
+    const body: Partial<ITodo> = await request.json();
     const todo = await Todo.findByIdAndUpdate(
       params.id,
       body,
@@ -328,7 +403,7 @@ export async function PUT(request, { params }) {
     return NextResponse.json(
       {
         success: false,
-        error: error.message,
+        error: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 400 }
     );
@@ -336,7 +411,10 @@ export async function PUT(request, { params }) {
 }
 
 // DELETE - Delete todo by ID
-export async function DELETE(request, { params }) {
+export async function DELETE(
+  request: NextRequest,
+  { params }: RouteParams
+): Promise<NextResponse<ApiResponse<{}>>> {
   try {
     await dbConnect();
     
@@ -360,7 +438,7 @@ export async function DELETE(request, { params }) {
     return NextResponse.json(
       {
         success: false,
-        error: error.message,
+        error: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 400 }
     );
@@ -370,17 +448,24 @@ export async function DELETE(request, { params }) {
 
 ---
 
-## 🎨 Step 7: Frontend Components
+## 🎨 Step 8: Frontend Components
 
-### 7.1 Create `components/TodoForm.js`
+### 8.1 Create `components/TodoForm.tsx`
 
-```javascript
+```typescript
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, FormEvent, ChangeEvent } from 'react';
+import { TodoFormData, ITodoDocument } from '@/types/todo';
 
-export default function TodoForm({ onSubmit, editTodo, onCancel }) {
-  const [formData, setFormData] = useState({
+interface TodoFormProps {
+  onSubmit: (formData: TodoFormData) => void;
+  editTodo: ITodoDocument | null;
+  onCancel: () => void;
+}
+
+export default function TodoForm({ onSubmit, editTodo, onCancel }: TodoFormProps) {
+  const [formData, setFormData] = useState<TodoFormData>({
     title: '',
     description: '',
     dueDate: '',
@@ -392,13 +477,13 @@ export default function TodoForm({ onSubmit, editTodo, onCancel }) {
       setFormData({
         title: editTodo.title,
         description: editTodo.description,
-        dueDate: editTodo.dueDate ? editTodo.dueDate.split('T')[0] : '',
+        dueDate: editTodo.dueDate ? editTodo.dueDate.toString().split('T')[0] : '',
         status: editTodo.status,
       });
     }
   }, [editTodo]);
 
-  const handleChange = (e) => {
+  const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({
       ...prev,
@@ -406,7 +491,7 @@ export default function TodoForm({ onSubmit, editTodo, onCancel }) {
     }));
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     onSubmit(formData);
     if (!editTodo) {
@@ -515,14 +600,22 @@ export default function TodoForm({ onSubmit, editTodo, onCancel }) {
 }
 ```
 
-### 7.2 Create `components/TodoItem.js`
+### 8.2 Create `components/TodoItem.tsx`
 
-```javascript
+```typescript
 'use client';
 
 import { format } from 'date-fns';
+import { ITodoDocument } from '@/types/todo';
 
-export default function TodoItem({ todo, onEdit, onDelete, onToggleStatus }) {
+interface TodoItemProps {
+  todo: ITodoDocument;
+  onEdit: (todo: ITodoDocument) => void;
+  onDelete: (id: string) => void;
+  onToggleStatus: (todo: ITodoDocument) => void;
+}
+
+export default function TodoItem({ todo, onEdit, onDelete, onToggleStatus }: TodoItemProps) {
   const isCompleted = todo.status === 'completed';
   const isOverdue = new Date(todo.dueDate) < new Date() && !isCompleted;
 
@@ -601,14 +694,22 @@ export default function TodoItem({ todo, onEdit, onDelete, onToggleStatus }) {
 }
 ```
 
-### 7.3 Create `components/TodoList.js`
+### 8.3 Create `components/TodoList.tsx`
 
-```javascript
+```typescript
 'use client';
 
 import TodoItem from './TodoItem';
+import { ITodoDocument } from '@/types/todo';
 
-export default function TodoList({ todos, onEdit, onDelete, onToggleStatus }) {
+interface TodoListProps {
+  todos: ITodoDocument[];
+  onEdit: (todo: ITodoDocument) => void;
+  onDelete: (id: string) => void;
+  onToggleStatus: (todo: ITodoDocument) => void;
+}
+
+export default function TodoList({ todos, onEdit, onDelete, onToggleStatus }: TodoListProps) {
   if (todos.length === 0) {
     return (
       <div className="text-center py-12 bg-white rounded-lg shadow-md">
@@ -635,22 +736,25 @@ export default function TodoList({ todos, onEdit, onDelete, onToggleStatus }) {
 
 ---
 
-## 🖥️ Step 8: Main Page (UI Integration)
+## 🖥️ Step 9: Main Page (UI Integration)
 
-### 8.1 Update `app/page.js`
+### 9.1 Update `app/page.tsx`
 
-```javascript
+```typescript
 'use client';
 
 import { useState, useEffect } from 'react';
 import TodoForm from '@/components/TodoForm';
 import TodoList from '@/components/TodoList';
+import { ITodoDocument, TodoFormData } from '@/types/todo';
+
+type FilterType = 'all' | 'incomplete' | 'completed';
 
 export default function Home() {
-  const [todos, setTodos] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [editingTodo, setEditingTodo] = useState(null);
-  const [filter, setFilter] = useState('all');
+  const [todos, setTodos] = useState<ITodoDocument[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [editingTodo, setEditingTodo] = useState<ITodoDocument | null>(null);
+  const [filter, setFilter] = useState<FilterType>('all');
 
   // Fetch all todos
   const fetchTodos = async () => {
@@ -676,7 +780,7 @@ export default function Home() {
   }, [filter]);
 
   // Create new todo
-  const handleCreateTodo = async (formData) => {
+  const handleCreateTodo = async (formData: TodoFormData) => {
     try {
       const response = await fetch('/api/todos', {
         method: 'POST',
@@ -701,7 +805,9 @@ export default function Home() {
   };
 
   // Update existing todo
-  const handleUpdateTodo = async (formData) => {
+  const handleUpdateTodo = async (formData: TodoFormData) => {
+    if (!editingTodo) return;
+    
     try {
       const response = await fetch(`/api/todos/${editingTodo._id}`, {
         method: 'PUT',
@@ -727,7 +833,7 @@ export default function Home() {
   };
 
   // Delete todo
-  const handleDeleteTodo = async (id) => {
+  const handleDeleteTodo = async (id: string) => {
     if (!confirm('Are you sure you want to delete this todo?')) {
       return;
     }
@@ -752,7 +858,7 @@ export default function Home() {
   };
 
   // Toggle todo status
-  const handleToggleStatus = async (todo) => {
+  const handleToggleStatus = async (todo: ITodoDocument) => {
     const newStatus = todo.status === 'completed' ? 'incomplete' : 'completed';
     
     try {
@@ -777,7 +883,7 @@ export default function Home() {
     }
   };
 
-  const handleEdit = (todo) => {
+  const handleEdit = (todo: ITodoDocument) => {
     setEditingTodo(todo);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -853,20 +959,26 @@ export default function Home() {
 }
 ```
 
-### 8.2 Update `app/layout.js`
+### 9.2 Update `app/layout.tsx`
 
-```javascript
+```typescript
 import { Inter } from 'next/font/google';
 import './globals.css';
+import { Metadata } from 'next';
+import { ReactNode } from 'react';
 
 const inter = Inter({ subsets: ['latin'] });
 
-export const metadata = {
+export const metadata: Metadata = {
   title: 'Todo App',
   description: 'A simple and beautiful todo application',
 };
 
-export default function RootLayout({ children }) {
+interface RootLayoutProps {
+  children: ReactNode;
+}
+
+export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="en">
       <body className={inter.className}>{children}</body>
@@ -877,21 +989,41 @@ export default function RootLayout({ children }) {
 
 ---
 
-## 🎯 Step 9: Run the Application
+## 🎯 Step 10: Run the Application
 
-### 9.1 Start Development Server
+### 10.1 Start Development Server
 
 ```bash
 npm run dev
 ```
 
-### 9.2 Open in Browser
+### 10.2 Open in Browser
 
 Navigate to: `http://localhost:3000`
 
 ---
 
-## 📝 Step 10: Testing CRUD Operations
+## ✨ TypeScript Benefits
+
+Using TypeScript in this project provides:
+
+1. **Type Safety**: Catch errors at compile time
+2. **Better IntelliSense**: Auto-completion in VS Code
+3. **Refactoring Support**: Safer code refactoring
+4. **Self-Documenting**: Types serve as inline documentation
+5. **Reduced Bugs**: Prevents common JavaScript errors
+
+### Key TypeScript Features Used:
+
+- **Interfaces**: `ITodo`, `ITodoDocument`, `TodoFormData`
+- **Type Aliases**: `TodoStatus`, `FilterType`
+- **Generic Types**: `NextResponse<ApiResponse<T>>`
+- **Type Assertions**: `!` operator for non-null assertions
+- **Union Types**: `'incomplete' | 'completed'`
+
+---
+
+## 📝 Step 11: Testing CRUD Operations
 
 ### Test Checklist:
 
@@ -905,7 +1037,7 @@ Navigate to: `http://localhost:3000`
 
 ---
 
-## 🚀 Step 11: Deployment (Optional)
+## 🚀 Step 12: Deployment (Optional)
 
 ### Deploy to Vercel:
 
@@ -978,6 +1110,12 @@ Navigate to: `http://localhost:3000`
 ### Issue 4: API returning 404
 **Solution**: Verify API route files are in correct folder structure
 
+### Issue 5: TypeScript errors in components
+**Solution**: Ensure all types are properly imported from `@/types/todo`
+
+### Issue 6: Mongoose type errors
+**Solution**: Install `@types/mongoose`: `npm install -D @types/mongoose`
+
 ---
 
 ## 📖 Additional Enhancements (Optional)
@@ -993,4 +1131,94 @@ Navigate to: `http://localhost:3000`
 
 ---
 
+## ⚙️ TypeScript Configuration (tsconfig.json)
+
+Your Next.js project should automatically generate a `tsconfig.json`. Here's what it typically includes:
+
+```json
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}
+```
+
+**Key Settings:**
+- `"strict": true` - Enables all strict type checking
+- `"paths": { "@/*": ["./*"] }` - Allows `@/` imports
+- `"jsx": "preserve"` - Required for React/Next.js
+
+---
+
+## 📂 File Structure Summary
+
+```
+todo-app/
+├── app/
+│   ├── api/todos/
+│   │   ├── route.ts (GET all, POST new)
+│   │   └── [id]/route.ts (GET, PUT, DELETE by ID)
+│   ├── layout.tsx
+│   ├── page.tsx
+│   └── globals.css
+├── components/
+│   ├── TodoForm.tsx
+│   ├── TodoItem.tsx
+│   └── TodoList.tsx
+├── lib/
+│   └── mongodb.ts
+├── models/
+│   └── Todo.ts
+├── types/
+│   └── todo.ts
+├── .env.local
+├── package.json
+├── tsconfig.json
+└── tailwind.config.ts
+```
+
+---
+
+## 🎓 Learning Resources
+
+### TypeScript
+- [TypeScript Official Docs](https://www.typescriptlang.org/)
+- [TypeScript Handbook](https://www.typescriptlang.org/docs/handbook/intro.html)
+
+### Next.js with TypeScript
+- [Next.js TypeScript Documentation](https://nextjs.org/docs/app/building-your-application/configuring/typescript)
+
+### MongoDB & Mongoose
+- [MongoDB Atlas](https://www.mongodb.com/cloud/atlas)
+- [Mongoose TypeScript Guide](https://mongoosejs.com/docs/typescript.html)
+
+### Tailwind CSS
+- [Tailwind CSS Documentation](https://tailwindcss.com/docs)
+
+---
+
 **Happy Coding! 🎉**
+
+Built with ❤️ using Next.js, TypeScript, MongoDB, and Tailwind CSS
